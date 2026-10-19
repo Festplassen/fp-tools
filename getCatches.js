@@ -1,5 +1,5 @@
 // getCatches.js - paste into the browser console (F12) while logged in to the game.
-// Version 3.1 (shown in the panel header, so you can tell if your bookmark is out of date).
+// Version 3.3 (shown in the panel header, so you can tell if your bookmark is out of date).
 // Collects Exotic and Arcane catch announcements from the game's "notification" chat channel
 // for the guild tags (default [DUCK]) and/or players you choose in the panel,
 // and lists them as full lines, copy-ready for Discord.
@@ -10,7 +10,7 @@
 // Every Exotic/Arcane catch seen is saved in this browser (all guilds, so changing the tag works
 // on older catches too). Use Export/Import to back up the saved catches or move them to another PC.
 (async () => {
-  const VERSION = "3.1";
+  const VERSION = "3.3";
   // Only one copy may run at a time: running the script again first closes the previous one.
   window.__getCatchesStop?.();
   let alive = true;
@@ -38,10 +38,10 @@
   const LAST_KEY = "getCatchesDUCK.lastSeen";     // time (ms) of the newest catch you copied in "New"
   const EXPORT_KEY = "getCatchesDUCK.lastExport"; // time (ms) of the last Export, for the backup reminder
   const MAX_ARCHIVE = 30000;
-  const BACKUP_DAYS = 7;
+  const SNOOZE_KEY = "getCatchesDUCK.backupSnooze"; // "Later" on the backup reminder hides it until this time
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
   const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } };
-  const settings = Object.assign({ tab: "new", showTime: false, rarities: null, from: "", to: "", extraNames: "", codeBlock: true, eventMode: "include", compare: false, tag: "DUCK", period: "today", periodN: 1, showFish: false, daily: false, minimized: false, pos: null }, load(SETTINGS_KEY, {}));
+  const settings = Object.assign({ tab: "new", showTime: false, rarities: null, from: "", to: "", extraNames: "", codeBlock: true, eventMode: "include", compare: false, backupDays: 7, tag: "DUCK", period: "today", periodN: 1, showFish: false, daily: false, minimized: false, pos: null }, load(SETTINGS_KEY, {}));
   settings.periodN = Math.max(1, Math.round(+settings.periodN) || 1);
   const saveSettings = () => store(SETTINGS_KEY, settings);
   // Guild tags to include, comma separated (e.g. "DUCK, OOO")
@@ -126,7 +126,14 @@
     archive.sort((a, b) => a.at - b.at);
     lastTrimmed = Math.max(0, archive.length - MAX_ARCHIVE);
     if (lastTrimmed) archive = archive.slice(-MAX_ARCHIVE);
-    if (!store(ARCHIVE_KEY, archive.map(c => [c.id, c.at, c.text, c.seen ? 1 : 0]))) notice = "Browser storage is full: export your catches, then keep fewer.";
+    // Storage full: drop the oldest 10% at a time until it fits, so new catches are never lost
+    let dropped = 0;
+    while (!store(ARCHIVE_KEY, archive.map(c => [c.id, c.at, c.text, c.seen ? 1 : 0]))) {
+      if (archive.length < 100) { notice = "Browser storage is full: export your catches, then clear some site data."; return; }
+      const k = Math.ceil(archive.length / 10);
+      archive = archive.slice(k); dropped += k;
+    }
+    if (dropped) { lastTrimmed += dropped; notice = `Browser storage was full: the ${dropped} oldest catches were dropped. Export a backup regularly.`; }
   };
   // Adds catches to the saved list (duplicates are skipped by id). Returns how many were new.
   const merge = (entries) => {
@@ -268,8 +275,9 @@
     const list = archive.filter(c => rar.has(c.rarity) && want(c) && c.at >= from - len && c.at < from && keep(c));
     const per = new Map();
     for (const c of list) { const k = c.tag ? `[${c.tag}] ${c.name}` : c.name; per.set(k, (per.get(k) || 0) + 1); }
-    return { total: list.length, per };
+    return { total: list.length, per, from: from - len, to: from };
   };
+  const prevLabel = () => `previous ${fmtTime(prevStats.from)} - ${fmtTime(prevStats.to)} UTC`;
   const delta = (cur, prev) => { const d = cur - prev; return d > 0 ? `+${d}` : d < 0 ? `${d}` : "±0"; };
   const prevNote = (name, cur) => !prevStats ? "" : prevStats.per.has(name) ? ` (${delta(cur, prevStats.per.get(name))})` : " (new)";
 
@@ -318,7 +326,7 @@
     return [
       { text: `${tagLabel()}${extraNames().size && tags().length ? " + selected players" : ""} Exotic/Arcane catches · ${periodText()}` },
       { text: `Total: ${sum.total} from ${rows.length} player${rows.length === 1 ? "" : "s"}${sum.total ? ` - ${count(sum)}` : ""}` },
-      ...(prevStats && !list.isEvent ? [{ text: `Previous period: ${prevStats.total} (${delta(sum.total, prevStats.total)}) · per player change in brackets` }] : []),
+      ...(prevStats && !list.isEvent ? [{ text: `Compared with ${prevLabel()}: ${prevStats.total} (${delta(sum.total, prevStats.total)}) · per player change in brackets` }] : []),
       { text: "" },
       ...rows.flatMap(p => [{ text: `${p.name}: ${p.total}${list.isEvent ? "" : prevNote(p.name, p.total)} - ${count(p)}` }, ...fishLines(p.key)]),
       ...dayLines(),
@@ -392,7 +400,7 @@
     g.fillStyle = bg; g.fillRect(0, 0, W, H);
     g.fillStyle = paint(COLORS.Arcane, 0, 0, W, 0); g.fillRect(0, 0, W, 6);
     text(`🦆 ${tagLabel()} · Exotic/Arcane catches`, PAD, 58, 28, "#ffffff", 700);
-    text(periodText() + (prevStats ? ` · previous period: ${prevStats.total} (${delta(list.length, prevStats.total)})` : ""), PAD, 88, 16, "#b5bac1", 400);
+    text(periodText() + (prevStats ? ` · vs ${prevLabel()}: ${prevStats.total} (${delta(list.length, prevStats.total)})` : ""), PAD, 88, 16, "#b5bac1", 400);
 
     // Stat tiles
     // Stat tiles in three groups: overview, rarity, how it was caught
@@ -627,7 +635,7 @@
     const evList = isReport && settings.eventMode !== "include" ? list.filter(c => methodOfText(c.text) === "other") : [];
     const repList = evList.length ? list.filter(c => methodOfText(c.text) !== "other") : list;
     const repEv = settings.eventMode === "separate" ? evList : null;
-    prevStats = isReport ? computePrev(c => settings.eventMode === "include" || methodOfText(c.text) !== "other") : null;
+    prevStats = isReport || settings.tab === "range" ? computePrev(c => !isReport || settings.eventMode === "include" || methodOfText(c.text) !== "other") : null;
     const parts = toParts(isReport ? reportLines(repList, repEv) : list);
     const msgs = parts.map(p => p.text);
     const rar = new Set(settings.rarities || RARITIES);
@@ -671,11 +679,13 @@
         <button id="gc-png" ${n ? "" : "disabled"} title="Download the report as an image with charts">⬇ Download PNG</button>
         <button id="gc-copypng" ${n ? "" : "disabled"} title="Copy the report image to the clipboard, ready to paste in Discord">⧉ Copy PNG</button>
         <label title="Show the change (+/-) against the same-length period right before this one"><input type="checkbox" id="gc-compare" ${settings.compare ? "checked" : ""}>Compare with previous period</label>`
-          : `<label><input type="checkbox" id="gc-time" ${settings.showTime ? "checked" : ""}>Time on each line (UTC)</label>`}</div></div>
+          : `<label><input type="checkbox" id="gc-time" ${settings.showTime ? "checked" : ""}>Time on each line (UTC)</label>${settings.tab === "range" ? `
+        <label title="Show how many catches the same-length period right before this one had"><input type="checkbox" id="gc-compare" ${settings.compare ? "checked" : ""}>Compare with previous period</label>` : ""}`}</div>
+        ${settings.tab === "range" && prevStats ? `<div class="gc-sub" style="margin-top:6px">${n} catches vs ${esc(prevLabel())}: ${prevStats.total} (${delta(n, prevStats.total)})</div>` : ""}</div>
 
       ${notice ? `<div class="gc-msg gc-ok">${esc(notice)}</div>` : ""}
       ${fetchError ? `<div class="gc-msg gc-err">${esc(fetchError)}</div>` : ""}
-      ${(() => { const t = load(EXPORT_KEY, 0); return archive.length && Date.now() - t > BACKUP_DAYS * 864e5 ? `<div class="gc-msg gc-warn">⚠ ${t ? `Last export was ${Math.floor((Date.now() - t) / 864e5)} days ago` : "You have never exported"}. Export a backup so your saved catches are safe if browser data is cleared.</div>` : ""; })()}
+      ${(() => { const t = load(EXPORT_KEY, 0), days = +settings.backupDays || 0; return days && archive.length && Date.now() - t > days * 864e5 && Date.now() > load(SNOOZE_KEY, 0) ? `<div class="gc-msg gc-warn">⚠ ${t ? `Last export was ${Math.floor((Date.now() - t) / 864e5)} days ago` : "You have never exported"}. Export a backup so your saved catches are safe if browser data is cleared. <button id="gc-snooze" class="gc-2" title="Hide this reminder for ${days} day${days === 1 ? "" : "s"}">Later</button></div>` : ""; })()}
       ${gapWarning ? `<div class="gc-msg gc-warn">⚠ ${esc(gapWarning)}</div>` : ""}
 
       <div class="gc-row" style="justify-content:space-between;margin-top:4px"><b>${n} catch${n === 1 ? "" : "es"}</b>
@@ -685,7 +695,8 @@
         <textarea readonly data-text="${i}"></textarea>`).join("") : `<div class="gc-sub" style="margin:10px 0">Nothing to show for this tab and filter.</div>`}
 
       <div class="gc-foot"><span class="gc-sub" title="${esc(stats)}">${esc(stats)}</span>
-        <span style="white-space:nowrap"><button id="gc-export" class="gc-2" title="Download all saved catches as a JSON file">Export</button> <button id="gc-import" class="gc-2" title="Add catches from an exported JSON file">Import</button></span></div>`}`;
+        <span style="white-space:nowrap"><button id="gc-export" class="gc-2" title="Download all saved catches as a JSON file">Export</button> <button id="gc-import" class="gc-2" title="Add catches from an exported JSON file">Import</button>
+          <select id="gc-backup" title="Remind me to export a backup">${[[1, "Remind: 1 day"], [3, "Remind: 3 days"], [7, "Remind: 7 days"], [14, "Remind: 14 days"], [30, "Remind: 30 days"], [0, "Remind: off"]].map(([k, v]) => `<option value="${k}" ${+settings.backupDays === k ? "selected" : ""}>${v}</option>`).join("")}</select></span></div>`}`;
     placePanel();
     panel.querySelectorAll("textarea[data-text]").forEach(t => { t.value = msgs[+t.dataset.text]; });
 
@@ -720,6 +731,8 @@
       render();
     });
     on("#gc-export", "onclick", () => { exportArchive(); render(); });
+    on("#gc-snooze", "onclick", () => { store(SNOOZE_KEY, Date.now() + (+settings.backupDays || 7) * 864e5); render(); });
+    on("#gc-backup", "onchange", (e) => { settings.backupDays = +e.target.value; saveSettings(); render(); });
     on("#gc-import", "onclick", importArchive);
     panel.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
       const text = msgs[+b.dataset.copy];

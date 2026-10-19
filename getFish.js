@@ -1,10 +1,10 @@
 // getFish.js - paste into the browser console (F12) while logged in to the game.
-// Version 2.3 (shown in the panel header, so you can tell if your bookmark is out of date).
+// Version 2.5 (shown in the panel header, so you can tell if your bookmark is out of date).
 // Opens a panel with three lists: "I have" (your inventory), "I need" (fish still needed for Mastery)
 // and "Nations" (fish still needed for your open nation orders).
 // Pick rarities and copy the lists in a Discord-friendly format.
 (async () => {
-  const VERSION = "2.3";
+  const VERSION = "2.5";
   // Only one copy may run at a time: running the script again first stops the previous run
   // (closes its panel and stops its requests, timers and event listeners).
   window.__getFishStop?.();
@@ -49,9 +49,9 @@
   // When each list was last fetched from the server (shown as "Updated X min ago")
   const fetchedAt = { have: Date.now(), need: 0, nation: 0 };
   let refreshFailed = false;
-  const haveFrom = p => merge(((p && p.inventory) || []).map(i => ({
-    name: i.name, rarity: i.rarity, biome: i.biomeId ?? i.biome_id ?? "?", count: i.count || 1,
-  })));
+  const haveFrom = p => merge(((p && p.inventory) || []).filter(i => i && i.name).map(i => ({
+    name: i.name, rarity: i.rarity || "?", biome: i.biomeId ?? i.biome_id ?? "?", count: Number(i.count ?? 1) || 0,
+  })).filter(i => i.count > 0));
 
   // Look up a fish's rarity from the game's biome fish catalog
   const rarityOf = (name, biome) => {
@@ -97,29 +97,33 @@
       fetchedAt.need = cache.at;
       masteryFailed = 0;
     } else {
+      // If the last load had biomes that failed, only those are asked again (the rest is kept)
+      const prev = window.__getFishMasteryPartial;
+      const retry = fresh(prev) && prev.failed.length > 0;
       const unlocked = (player.unlockedBiomes || []).map(String);
-      const ids = Object.keys(window.BIOMES || {}).filter(id => !unlocked.length || unlocked.includes(String(id)));
-      rows = [];
-      let ok = 0;
+      const ids = retry ? prev.failed : Object.keys(window.BIOMES || {}).filter(id => !unlocked.length || unlocked.includes(String(id)));
+      const byId = retry ? { ...prev.byId } : {};
+      const failed = [];
       for (const [i, id] of ids.entries()) {
         if (!alive) return;
         onProgress?.(i + 1, ids.length);
         try {
           const m = await window.ApiService.request(`/mastery/biome/${id}`);
           if (!alive) return;
-          ok++;
-          for (const t of m?.targetFish || []) {
-            const remaining = (t.required || 0) - (m.progress?.[t.fishName] || 0);
-            rows.push({ fishName: t.fishName, rarity: t.rarity, biomeId: id, remaining });
-          }
-        } catch { }
+          byId[id] = (m?.targetFish || []).filter(t => t && t.fishName).map(t => ({
+            fishName: t.fishName, rarity: t.rarity, biomeId: id,
+            remaining: (t.required || 0) - (m.progress?.[t.fishName] || 0),
+          }));
+        } catch { failed.push(id); }
         if (i < ids.length - 1) await sleep(400);
       }
-      if (!ok) return;
-      masteryFailed = ids.length - ok;
-      // Only remember complete results, so a biome that failed is asked again next time
-      fetchedAt.need = Date.now();
-      if (!masteryFailed) window.__getFishMastery = { at: fetchedAt.need, account, rows };
+      if (!Object.keys(byId).length) return;
+      masteryFailed = failed.length;
+      rows = Object.values(byId).flat();
+      fetchedAt.need = retry ? prev.at : Date.now();
+      // Complete results are cached; partial ones are kept apart so ↻ only retries the failed biomes
+      if (masteryFailed) window.__getFishMasteryPartial = { at: fetchedAt.need, account, byId, failed };
+      else { delete window.__getFishMasteryPartial; window.__getFishMastery = { at: fetchedAt.need, account, rows }; }
     }
     masteryOk = true;
     lists.need = merge(rows.filter(f => f.remaining > 0).map(f => {
@@ -148,7 +152,8 @@
       } catch { return; }
     }
     nationOk = true;
-    lists.nation = merge(orders.map(o => {
+    // An order without a fish name is skipped instead of breaking the whole tab
+    lists.nation = merge(orders.filter(o => o && o.fish_name).map(o => {
       const biome = o.biome_id ?? o.biomeId ?? "?";
       return {
         name: o.fish_name, rarity: o.rarity || rarityOf(o.fish_name, biome), biome,
@@ -173,7 +178,8 @@
     if (mode !== "have" && subtractOwned) {
       fish = fish.map(f => ({ ...f, count: f.count - ownedOf(f) })).filter(f => f.count > 0);
     }
-    const lo = biomeFrom === "" ? -Infinity : Number(biomeFrom), hi = biomeTo === "" ? Infinity : Number(biomeTo);
+    let lo = biomeFrom === "" ? -Infinity : Number(biomeFrom), hi = biomeTo === "" ? Infinity : Number(biomeTo);
+    if (lo > hi) [lo, hi] = [hi, lo]; // a range picked "backwards" (B8 to B3) still works
     return fish.filter(f => { const b = Number(f.biome); return isNaN(b) || (b >= lo && b <= hi); });
   };
 
@@ -497,10 +503,13 @@
       ta.value = text;
       const btn = box.querySelector(".gf-copy");
       btn.onclick = async () => {
+        let ok = true;
         try { await navigator.clipboard.writeText(text); }
-        catch { ta.select(); document.execCommand("copy"); }
-        btn.textContent = "✓ Copied"; btn.classList.add("ok");
-        setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("ok"); }, 1500);
+        catch { ta.select(); try { ok = document.execCommand("copy"); } catch { ok = false; } }
+        if (!alive) return;
+        // Only say "Copied" if it really worked; otherwise the text is selected for Ctrl+C
+        btn.textContent = ok ? "✓ Copied" : "Press Ctrl+C"; btn.classList.toggle("ok", ok);
+        setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("ok"); }, ok ? 1500 : 4000);
       };
       wrap.appendChild(box);
     });
@@ -527,18 +536,24 @@
     return note;
   }
 
+  const updatedText = () => {
+    const min = Math.floor((Date.now() - fetchedAt[mode]) / 60000);
+    return `Updated ${min < 1 ? "just now" : `${min} min ago`}`;
+  };
+  // Keep "Updated X min ago" current (no server requests, only the label changes)
+  const ticker = setInterval(() => {
+    const el = out.querySelector(".gf-updated");
+    if (el && fetchedAt[mode]) el.textContent = updatedText();
+  }, 30000);
+  cleanups.push(() => clearInterval(ticker));
+
   function render() {
     if (isLoading()) { out.innerHTML = `<div class="gf-empty">Loading…</div>`; return; }
     const fish = view();
     out.innerHTML = "";
     const info = document.createElement("div");
     info.className = "gf-updated";
-    const at = fetchedAt[mode];
-    if (at) {
-      const min = Math.floor((Date.now() - at) / 60000);
-      info.textContent = `Updated ${min < 1 ? "just now" : `${min} min ago`}`;
-      out.appendChild(info);
-    }
+    if (fetchedAt[mode]) { info.textContent = updatedText(); out.appendChild(info); }
     if (refreshFailed) {
       const n = document.createElement("div");
       n.className = "gf-note";
