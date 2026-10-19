@@ -1,10 +1,10 @@
 // getFish.js - paste into the browser console (F12) while logged in to the game.
-// Version 2.2 (shown in the panel header, so you can tell if your bookmark is out of date).
+// Version 2.3 (shown in the panel header, so you can tell if your bookmark is out of date).
 // Opens a panel with three lists: "I have" (your inventory), "I need" (fish still needed for Mastery)
 // and "Nations" (fish still needed for your open nation orders).
 // Pick rarities and copy the lists in a Discord-friendly format.
 (async () => {
-  const VERSION = "2.2";
+  const VERSION = "2.3";
   // Only one copy may run at a time: running the script again first stops the previous run
   // (closes its panel and stops its requests, timers and event listeners).
   window.__getFishStop?.();
@@ -13,7 +13,7 @@
   const stop = () => {
     if (!alive) return;
     alive = false;
-    for (const fn of cleanups) { try { fn(); } catch {} }
+    for (const fn of cleanups) { try { fn(); } catch { } }
     document.getElementById("getfish-panel")?.remove();
     document.getElementById("getfish-style")?.remove();
     if (window.__getFishStop === stop) delete window.__getFishStop;
@@ -26,11 +26,11 @@
   // Your choices (tab, rarities, format, settings, biome range) are remembered in this browser only
   const SETTINGS_KEY = "getFish.settings";
   let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch {}
+  try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch { }
   const save = () => {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({ nationPicked, mode, format, subtractOwned, biomeFrom, biomeTo, rarityDefaultsV2: Object.fromEntries(Object.entries(chosenBy).filter(([k]) => k !== "nation" || nationPicked).map(([k, v]) => [k, [...v]])) }));
-    } catch {}
+    } catch { }
   };
 
   let player;
@@ -112,7 +112,7 @@
             const remaining = (t.required || 0) - (m.progress?.[t.fishName] || 0);
             rows.push({ fishName: t.fishName, rarity: t.rarity, biomeId: id, remaining });
           }
-        } catch {}
+        } catch { }
         if (i < ids.length - 1) await sleep(400);
       }
       if (!ok) return;
@@ -150,8 +150,10 @@
     nationOk = true;
     lists.nation = merge(orders.map(o => {
       const biome = o.biome_id ?? o.biomeId ?? "?";
-      return { name: o.fish_name, rarity: o.rarity || rarityOf(o.fish_name, biome), biome,
-        count: (o.target_amount || 0) - (o.current_progress || 0) };
+      return {
+        name: o.fish_name, rarity: o.rarity || rarityOf(o.fish_name, biome), biome,
+        count: (o.target_amount || 0) - (o.current_progress || 0)
+      };
     }).filter(f => f.count > 0));
     onNationLoaded?.();
   }
@@ -177,6 +179,8 @@
 
   // Discord format: code block with aligned columns, grouped by biome
   const biomeName = id => window.BIOMES?.[id]?.name || "";
+  // Escape game text before it goes into innerHTML
+  const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   // Returns the list as one or more Discord messages (Discord's limit is 2000 characters).
   // "full": aligned code block grouped by biome. "compact": one short line per fish, no code block.
   const DISCORD_LIMIT = 2000;
@@ -454,7 +458,7 @@
     const ids = [...new Set([...Object.keys(window.BIOMES || {}), ...[...lists.have, ...(lists.need || []), ...(lists.nation || [])].map(f => String(f.biome))])]
       .filter(b => !isNaN(Number(b))).sort((a, b) => a - b);
     const opts = (sel, label) => `<option value="">${label}</option>` +
-      ids.map(id => `<option value="${id}" ${String(sel) === String(id) ? "selected" : ""}>B${id} ${biomeName(id)}</option>`).join("");
+      ids.map(id => `<option value="${esc(id)}" ${String(sel) === String(id) ? "selected" : ""}>B${esc(id)} ${esc(biomeName(id))}</option>`).join("");
     fromSel.innerHTML = opts(biomeFrom, "First");
     toSel.innerHTML = opts(biomeTo, "Last");
   }
@@ -473,7 +477,7 @@
       const chip = document.createElement("button");
       chip.className = "gf-chip" + (chosen.has(r) ? " on" : "");
       chip.style.setProperty("--c", colorOf(r));
-      chip.innerHTML = `<span class="dot" style="background:${paintOf(r)}"></span><span style="${textStyle(r)}">${r}</span><span class="n">${sum(fish.filter(f => f.rarity === r))}</span>`;
+      chip.innerHTML = `<span class="dot" style="background:${paintOf(r)}"></span><span style="${textStyle(r)}">${esc(r)}</span><span class="n">${sum(fish.filter(f => f.rarity === r))}</span>`;
       chip.onclick = () => { chosen.has(r) ? chosen.delete(r) : chosen.add(r); userPicked(); save(); drawChips(); render(); };
       chips.appendChild(chip);
     }
@@ -485,7 +489,7 @@
     wrap.className = "gf-card";
     wrap.style.setProperty("--c", color);
     wrap.innerHTML = `<div class="gf-card-head"><span class="gf-card-title"></span></div>`;
-    wrap.querySelector(".gf-card-title").innerHTML = `<span style="${RARITY_COLORS[title] ? textStyle(title) : ""}">${title}</span><span class="n">${list.length} type${list.length === 1 ? "" : "s"} · ${sum(list)} fish${parts.length > 1 ? ` · ${parts.length} messages` : ""}</span>`;
+    wrap.querySelector(".gf-card-title").innerHTML = `<span style="${RARITY_COLORS[title] ? textStyle(title) : ""}">${esc(title)}</span><span class="n">${list.length} type${list.length === 1 ? "" : "s"} · ${sum(list)} fish${parts.length > 1 ? ` · ${parts.length} messages` : ""}</span>`;
     parts.forEach((text, i) => {
       const box = document.createElement("div");
       box.innerHTML = `<div class="gf-part"><span>${parts.length > 1 ? `Message ${i + 1} of ${parts.length}` : ""}</span><span class="gf-len">${text.length}/${DISCORD_LIMIT}</span><button class="gf-copy">Copy</button></div><textarea readonly></textarea>`;
@@ -550,8 +554,10 @@
       out.appendChild(n);
     }
     if (mode === "nation" && !nationOk) return empty("Could not fetch nation orders. Try ↻.");
-    if (!fish.length) return empty({ need: "Nothing missing for Mastery in these biomes.",
-      nation: "No open nation orders in these biomes.", have: "No fish in these biomes." }[mode]);
+    if (!fish.length) return empty({
+      need: "Nothing missing for Mastery in these biomes.",
+      nation: "No open nation orders in these biomes.", have: "No fish in these biomes."
+    }[mode]);
     const sel = raritiesIn(fish).filter(r => chosen.has(r));
     if (!sel.length) return empty("Select at least one rarity above.");
     if (mode === "nation") out.appendChild(overlapNote(fish.filter(f => sel.includes(f.rarity))));

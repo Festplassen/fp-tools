@@ -1,5 +1,5 @@
 // getCatches.js - paste into the browser console (F12) while logged in to the game.
-// Version 2.9 (shown in the panel header, so you can tell if your bookmark is out of date).
+// Version 3.1 (shown in the panel header, so you can tell if your bookmark is out of date).
 // Collects Exotic and Arcane catch announcements from the game's "notification" chat channel
 // for the guild tags (default [DUCK]) and/or players you choose in the panel,
 // and lists them as full lines, copy-ready for Discord.
@@ -10,7 +10,7 @@
 // Every Exotic/Arcane catch seen is saved in this browser (all guilds, so changing the tag works
 // on older catches too). Use Export/Import to back up the saved catches or move them to another PC.
 (async () => {
-  const VERSION = "3.0";
+  const VERSION = "3.1";
   // Only one copy may run at a time: running the script again first closes the previous one.
   window.__getCatchesStop?.();
   let alive = true;
@@ -19,7 +19,7 @@
   const stop = () => {
     if (!alive) return;
     alive = false;
-    try { liveStream?.close(); } catch {}
+    try { liveStream?.close(); } catch { }
     if (onStorage) removeEventListener("storage", onStorage);
     document.getElementById("gc-panel")?.remove();
     document.getElementById("gc-style")?.remove();
@@ -42,6 +42,7 @@
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
   const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } };
   const settings = Object.assign({ tab: "new", showTime: false, rarities: null, from: "", to: "", extraNames: "", codeBlock: true, eventMode: "include", compare: false, tag: "DUCK", period: "today", periodN: 1, showFish: false, daily: false, minimized: false, pos: null }, load(SETTINGS_KEY, {}));
+  settings.periodN = Math.max(1, Math.round(+settings.periodN) || 1);
   const saveSettings = () => store(SETTINGS_KEY, settings);
   // Guild tags to include, comma separated (e.g. "DUCK, OOO")
   const tags = () => settings.tag.split(",").map(t => t.trim().replace(/^\[|\]$/g, "").toUpperCase()).filter(Boolean);
@@ -196,7 +197,7 @@
       });
       liveStream?.addEventListener?.("error", onDrop);
       liveStream?.addEventListener?.("open", onOpen);
-    } catch {}
+    } catch { }
   };
 
   // ---------- Formatting ----------
@@ -233,7 +234,8 @@
       case "hours": return { from: now - n * 3600e3, to: now };
       case "custom": return {
         from: settings.from ? new Date(settings.from + "Z").getTime() : -Infinity,
-        to: settings.to ? new Date(settings.to + "Z").getTime() : Infinity };
+        to: settings.to ? new Date(settings.to + "Z").getTime() : Infinity
+      };
       default: return { from: midnight, to: now };
     }
   };
@@ -321,7 +323,7 @@
       ...rows.flatMap(p => [{ text: `${p.name}: ${p.total}${list.isEvent ? "" : prevNote(p.name, p.total)} - ${count(p)}` }, ...fishLines(p.key)]),
       ...dayLines(),
       ...(ev ? [{ text: "" }, { text: `Event catches (not counted above): ${ev.length}` },
-        ...reportLines(Object.assign([...ev], { isEvent: true })).slice(3).filter(l => l.text && !/^Per day|^\d{4}-/.test(l.text))] : []),
+      ...reportLines(Object.assign([...ev], { isEvent: true })).slice(3).filter(l => l.text && !/^Per day|^\d{4}-/.test(l.text))] : []),
     ];
   };
 
@@ -519,6 +521,13 @@
   };
   // Import one or more exported files (e.g. from guild mates). Catches are matched by the game's
   // message id, which is the same for everyone, so overlapping files never create duplicates.
+  // Only accept entries that look like real catch lines, so a broken or hostile file can't
+  // crash the script or fill up browser storage
+  const MAX_IMPORT_MB = 20, MAX_TEXT = 300;
+  const validImport = (c) => c && typeof c === "object"
+    && typeof c.text === "string" && c.text.length <= MAX_TEXT && !!rarityOf(c.text)
+    && (typeof c.id === "string" || typeof c.id === "number") && String(c.id).length <= 100
+    && (c.at == null || Number.isFinite(Number(c.at)));
   const importArchive = () => {
     const input = document.createElement("input");
     input.type = "file";
@@ -529,12 +538,13 @@
       const failed = [];
       for (const f of input.files) {
         try {
+          if (f.size > MAX_IMPORT_MB * 1048576) throw new Error(`larger than ${MAX_IMPORT_MB} MB`);
           const data = JSON.parse(await f.text());
           const list = Array.isArray(data) ? data : data.catches;
           if (!Array.isArray(list)) throw new Error("no catches found");
           total += list.length;
           lastTrimmed = 0;
-          added += merge(list.filter(c => c && c.text).map(c => toEntry(c.id, c.at, c.text)));
+          added += merge(list.filter(validImport).map(c => toEntry(c.id, c.at, c.text)));
           trimmed += lastTrimmed;
         } catch (e) {
           failed.push(`${f.name} (${e && e.message || e})`);
@@ -607,7 +617,7 @@
     range: "Catches within the chosen period.",
     report: "Totals per player within the chosen period.",
   };
-  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/'/g, "&#39;");
   const render = () => {
     if (!alive) return;
     const list = selected();
@@ -639,7 +649,7 @@
 
       ${hasPeriod ? `<div class="gc-card"><h4>Period (UTC, days start 00:00)</h4><div class="gc-row">
         <select id="gc-period">${Object.entries(PERIODS).map(([k, v]) => `<option value="${k}" ${settings.period === k ? "selected" : ""}>${v}</option>`).join("")}</select>
-        ${settings.period === "days" || settings.period === "hours" ? `<label>N = <input type="number" id="gc-n" min="1" max="${settings.period === "days" ? 365 : 8760}" value="${settings.periodN}" style="width:70px"></label>` : ""}</div>
+        ${settings.period === "days" || settings.period === "hours" ? `<label>N = <input type="number" id="gc-n" min="1" max="${settings.period === "days" ? 365 : 8760}" value="${Math.max(1, Math.round(+settings.periodN) || 1)}" style="width:70px"></label>` : ""}</div>
         ${settings.period === "custom" ? `<div class="gc-grid" style="margin-top:8px"><span>From</span><input type="datetime-local" id="gc-from" value="${esc(settings.from)}"><span>To</span><input type="datetime-local" id="gc-to" value="${esc(settings.to)}"></div>` : ""}
         <div class="gc-sub" style="margin-top:6px">${esc(periodText())}</div></div>` : ""}
 
@@ -661,7 +671,7 @@
         <button id="gc-png" ${n ? "" : "disabled"} title="Download the report as an image with charts">⬇ Download PNG</button>
         <button id="gc-copypng" ${n ? "" : "disabled"} title="Copy the report image to the clipboard, ready to paste in Discord">⧉ Copy PNG</button>
         <label title="Show the change (+/-) against the same-length period right before this one"><input type="checkbox" id="gc-compare" ${settings.compare ? "checked" : ""}>Compare with previous period</label>`
-        : `<label><input type="checkbox" id="gc-time" ${settings.showTime ? "checked" : ""}>Time on each line (UTC)</label>`}</div></div>
+          : `<label><input type="checkbox" id="gc-time" ${settings.showTime ? "checked" : ""}>Time on each line (UTC)</label>`}</div></div>
 
       ${notice ? `<div class="gc-msg gc-ok">${esc(notice)}</div>` : ""}
       ${fetchError ? `<div class="gc-msg gc-err">${esc(fetchError)}</div>` : ""}
