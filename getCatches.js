@@ -1,17 +1,8 @@
-// getCatches.js - paste into the browser console (F12) while logged in to the game.
-// Version 3.3 (shown in the panel header, so you can tell if your bookmark is out of date).
-// Collects Exotic and Arcane catch announcements from the game's "notification" chat channel
-// for the guild tags (default [DUCK]) and/or players you choose in the panel,
-// and lists them as full lines, copy-ready for Discord.
-// Tabs: "New" (since you last copied), "All", "Time range" and "Report" (totals per player).
-// Periods: today / yesterday (days start 00:00 UTC, server time), last N days, last N hours, or custom from/to.
-// Uses ONE request per run (and per Refresh click): /chat/history/notification.
-// While the panel is open it also listens to the game's catch-feed stream (no polling).
-// Every Exotic/Arcane catch seen is saved in this browser (all guilds, so changing the tag works
-// on older catches too). Use Export/Import to back up the saved catches or move them to another PC.
+// getCatches.js - Exotic/Arcane catch lister for Discord. See docs/getCatches.md.
+// Version 3.5 (shown in the panel header, so you can tell if your bookmark is out of date).
 (async () => {
-  const VERSION = "3.3";
-  // Only one copy may run at a time: running the script again first closes the previous one.
+  const VERSION = "3.5";
+  // Running the script again closes the previous copy
   window.__getCatchesStop?.();
   let alive = true;
   let liveStream = null;
@@ -31,8 +22,7 @@
   // Only Exotic and Arcane catches are collected
   const RARITIES = ["Exotic", "Arcane"];
 
-  // Stored in this browser only
-  // Storage names are kept from when the script was called getCatchesDUCK, so saved catches carry over
+  // Old getCatchesDUCK key names keep saved data
   const SETTINGS_KEY = "getCatchesDUCK.settings";
   const ARCHIVE_KEY = "getCatchesDUCK.archive";   // all Exotic/Arcane catches seen, by message id
   const LAST_KEY = "getCatchesDUCK.lastSeen";     // time (ms) of the newest catch you copied in "New"
@@ -49,12 +39,10 @@
   const tagLabel = () => tags().length ? tags().map(t => `[${t}]`).join(" ") : (extraNames().size ? "Selected players" : "All guilds");
 
   // Full announcement line, e.g. "[DUCK] Eden - Newcomer caught an Exotic Thunder Behemoth from Autocasting!"
-  // The game puts "🎣 " in front; drop it so each line starts with the guild tag
   const cleanText = (t) => String(t || "").replace(/^[\s\p{Extended_Pictographic}\uFE0F]*/u, "").trim();
   // "[TAG] Name - Title caught ..." or "Name caught ..." (no guild / no title)
   const tagOf = (text) => ((text.match(/^\[([^\]]*)\]/) || [])[1] || "").toUpperCase();
-  // Titles come from the game's own achievement list, so a " - " inside a player name is kept.
-  // (No title contains " - ".) Without the list, the text after the last " - " is taken as the title.
+  // Titles come from the game's achievement list, so " - " inside a name is kept
   const TITLES = new Set((window.ACHIEVEMENTS || []).flatMap(a => [a && a.title, a && a.name]).filter(Boolean));
   const nameOf = (text) => {
     const body = text.replace(/^\[[^\]]*\]\s*/, "").split(/ caught an? /)[0].trim();
@@ -67,11 +55,8 @@
   const isCatch = (m) => / caught an? /.test(m.message_text || "");
   const toEntry = (id, at, text) => ({ id: String(id), at: Number(at) || 0, text, rarity: rarityOf(text), tag: tagOf(text), name: nameOf(text) });
 
-  // Older versions stored only one guild and fewer fields; fill them in
   let lastSeen = load(LAST_KEY, 0);
-  // "seen" = already copied in "New". It is tracked per catch (not by time), so older catches
-  // filled in later by Import or Refresh still show up in "New". Imports never carry "seen" over.
-  // Stored compactly as [id, at, text, seen]; the old object format is still read
+  // Stored as [id, at, text, seen]; the old object format still loads
   const loadArchive = () => load(ARCHIVE_KEY, []).map(c => Array.isArray(c) ? { id: c[0], at: c[1], text: c[2], seen: !!c[3] } : c).filter(c => c && c.text)
     .map(c => ({ ...toEntry(c.id, c.at, c.text), seen: c.seen ?? (Number(c.at) <= lastSeen) })).filter(c => c.rarity);
   let archive = loadArchive();
@@ -83,9 +68,7 @@
     saveArchive(items.map(c => c.id));
   };
 
-  // "Last posted" from Discord: find the pasted line among the saved catches and make it the
-  // dividing point for "New". Ignores ```, 🎣, extra spaces and a leading "YYYY-MM-DD HH:MM" time.
-  // If several pasted lines are given, the last one is used.
+  // Pasted last Discord line becomes the dividing point for "New"
   const normLine = (t) => cleanText(String(t).replace(/`/g, "")).replace(/^\d{4}-\d\d-\d\d \d\d:\d\d\s+/, "").replace(/\s+/g, " ").trim().toLowerCase();
   const setLastPosted = (pasted) => {
     const line = String(pasted).split(/\r?\n/).map(normLine).filter(Boolean).pop();
@@ -115,9 +98,7 @@
   let gapWarning = "";
   let notice = "";
   let lastTrimmed = 0; // catches dropped by the last save because of the MAX_ARCHIVE limit
-  // Several tabs may run the script at once. Before saving, re-read what is stored and combine:
-  // catches another tab added are kept, and only the catches changed here ("touched") override
-  // the stored copy. The other tabs pick the result up through the "storage" event below.
+  // Combines with what other tabs saved; only "touched" catches override the stored copy
   const saveArchive = (touched = []) => {
     const mine = new Set(touched.map(String));
     const byId = new Map(loadArchive().map(c => [c.id, c]));
@@ -126,7 +107,7 @@
     archive.sort((a, b) => a.at - b.at);
     lastTrimmed = Math.max(0, archive.length - MAX_ARCHIVE);
     if (lastTrimmed) archive = archive.slice(-MAX_ARCHIVE);
-    // Storage full: drop the oldest 10% at a time until it fits, so new catches are never lost
+    // Storage full: drop the oldest 10% until it fits
     let dropped = 0;
     while (!store(ARCHIVE_KEY, archive.map(c => [c.id, c.at, c.text, c.seen ? 1 : 0]))) {
       if (archive.length < 100) { notice = "Browser storage is full: export your catches, then clear some site data."; return; }
@@ -163,8 +144,7 @@
       stats = `Last fetch: ${msgs.length} messages in the catch feed, ${entries.length} Exotic/Arcane, ${entries.filter(wantedFn()).length} from your chosen guilds/players.`;
       if (!msgs.length) fetchError = "The game returned no messages for the catch feed.";
       else if (!msgs.some(isCatch)) fetchError = `None of the ${msgs.length} messages could be read as catches. The game's message format may have changed.`;
-      // Gap check: if even the oldest fetched message is newer than the newest catch saved before,
-      // catches in between have dropped out of the game's history and are missing here.
+      // Gap check: history no longer reaches back to the newest saved catch
       const before = archive.length ? archive[archive.length - 1].at : 0;
       const oldest = Math.min(...msgs.map(m => parseUtc(m.created_at)).filter(Boolean));
       gapWarning = before && msgs.length && oldest > before
@@ -212,10 +192,9 @@
   const pad = (n) => String(n).padStart(2, "0");
   // All times are shown and entered in UTC (the game's server time)
   const fmtTime = (ms) => { const d = new Date(ms); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
-  // Report lines have no time of their own
+  // Optional UTC time in front of each catch line
   const toLine = (c) => settings.showTime && c.at != null ? `${fmtTime(c.at)}  ${c.text}` : c.text;
-  // Splits lines into Discord messages under the 2000-character limit.
-  // Each part keeps its own catches, so copying one part only marks that part as seen.
+  // Splits into Discord messages under 2000 characters; each part keeps its own catches
   const toParts = (list) => {
     const out = [];
     let cur = [];
@@ -265,7 +244,7 @@
   };
 
   // Same-length period right before the chosen one, for "Compare with previous period"
-  let prevStats = null; // { total, per: Map(display name -> total) }
+  let prevStats = null; // { total, per: Map(display name -> total), from, to }
   const computePrev = (keep) => {
     const { from, to } = periodRange();
     if (!settings.compare || !isFinite(from)) return null;
@@ -281,10 +260,10 @@
   const delta = (cur, prev) => { const d = cur - prev; return d > 0 ? `+${d}` : d < 0 ? `${d}` : "±0"; };
   const prevNote = (name, cur) => !prevStats ? "" : prevStats.per.has(name) ? ` (${delta(cur, prevStats.per.get(name))})` : " (new)";
 
-  // Report: totals per player for the last N hours, most catches first
+  // Report: totals per player for the chosen period, most catches first
   const reportLines = (list, ev = null) => {
     const rar = RARITIES.filter(r => (settings.rarities || RARITIES).includes(r)).reverse(); // Arcane first
-    // How it was caught: "... from Autocasting!" = auto, no "from" = manual, any other "from X" = event (e.g. Event Exchange)
+    // "from Autocasting" = auto, no "from" = manual, other "from X" = event
     const methodOf = (text) => { const m = text.match(/ from (.+?)!?$/); return !m ? "manual" : /autocast/i.test(m[1]) ? "auto" : "other"; };
     // Counts per rarity and method, e.g. p.by.Arcane = { auto: 2, manual: 1 }
     const add = (p, c) => { const k = methodOf(c.text); p.by = p.by || {}; const b = p.by[c.rarity] = p.by[c.rarity] || {}; b[k] = (b[k] || 0) + 1; };
@@ -336,7 +315,7 @@
   };
 
   // ---------- Report as an image (drawn in the browser, no extra requests) ----------
-  // Rarity colours come from the game itself (window.RARITY_COLORS); Exotic and Arcane are gradients there
+  // Rarity colours from window.RARITY_COLORS (Exotic/Arcane are gradients)
   const GAME_COLORS = window.RARITY_COLORS || {};
   const COLORS = {
     Exotic: GAME_COLORS.Exotic || "linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%)",
@@ -402,7 +381,6 @@
     text(`🦆 ${tagLabel()} · Exotic/Arcane catches`, PAD, 58, 28, "#ffffff", 700);
     text(periodText() + (prevStats ? ` · vs ${prevLabel()}: ${prevStats.total} (${delta(list.length, prevStats.total)})` : ""), PAD, 88, 16, "#b5bac1", 400);
 
-    // Stat tiles
     // Stat tiles in three groups: overview, rarity, how it was caught
     const groups = [
       ["Overview", [["Catches", sum.total, "#ffffff"], ["Players", rows.length, "#ffffff"]]],
@@ -527,10 +505,7 @@
     store(EXPORT_KEY, Date.now());
     notice = `Exported ${archive.length} catches.`;
   };
-  // Import one or more exported files (e.g. from guild mates). Catches are matched by the game's
-  // message id, which is the same for everyone, so overlapping files never create duplicates.
-  // Only accept entries that look like real catch lines, so a broken or hostile file can't
-  // crash the script or fill up browser storage
+  // Import exported files; matched by message id, only valid catch lines accepted
   const MAX_IMPORT_MB = 20, MAX_TEXT = 300;
   const validImport = (c) => c && typeof c === "object"
     && typeof c.text === "string" && c.text.length <= MAX_TEXT && !!rarityOf(c.text)

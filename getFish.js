@@ -1,12 +1,6 @@
-// getFish.js - paste into the browser console (F12) while logged in to the game.
-// Version 2.5 (shown in the panel header, so you can tell if your bookmark is out of date).
-// Opens a panel with three lists: "I have" (your inventory), "I need" (fish still needed for Mastery)
-// and "Nations" (fish still needed for your open nation orders).
-// Pick rarities and copy the lists in a Discord-friendly format.
+// getFish.js v2.7 · documentation: docs/getFish.md
 (async () => {
-  const VERSION = "2.5";
-  // Only one copy may run at a time: running the script again first stops the previous run
-  // (closes its panel and stops its requests, timers and event listeners).
+  const VERSION = "2.7";
   window.__getFishStop?.();
   let alive = true;
   const cleanups = [];
@@ -23,7 +17,6 @@
 
   const RARITIES = window.RARITIES || ["Common", "Uncommon", "Fine", "Rare", "Epic", "Legendary", "Mythic", "Exotic", "Arcane"];
 
-  // Your choices (tab, rarities, format, settings, biome range) are remembered in this browser only
   const SETTINGS_KEY = "getFish.settings";
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch { }
@@ -41,26 +34,22 @@
     stop();
     return;
   }
-  if (!alive) return; // a newer run took over while we were waiting
-  // Remembered Mastery/Nations data belongs to one account, so switching account never shows old data
+  if (!alive) return;
   const accountOf = p => String(p?.id ?? p?.user_id ?? p?.userId ?? p?.username ?? p?.name ?? "");
   const account = accountOf(player);
   const fresh = cache => cache && cache.account === account && Date.now() - cache.at < 5 * 60 * 1000;
-  // When each list was last fetched from the server (shown as "Updated X min ago")
   const fetchedAt = { have: Date.now(), need: 0, nation: 0 };
   let refreshFailed = false;
   const haveFrom = p => merge(((p && p.inventory) || []).filter(i => i && i.name).map(i => ({
     name: i.name, rarity: i.rarity || "?", biome: i.biomeId ?? i.biome_id ?? "?", count: Number(i.count ?? 1) || 0,
   })).filter(i => i.count > 0));
 
-  // Look up a fish's rarity from the game's biome fish catalog
   const rarityOf = (name, biome) => {
     const byRarity = window.BIOMES?.[biome]?.fish || {};
     for (const [r, list] of Object.entries(byRarity)) if (list?.some(f => f.name === name)) return r;
     return "?";
   };
 
-  // Merge identical fish (same name, rarity and biome) and sort by biome, then name
   const merge = items => {
     const groups = new Map();
     for (const { name, rarity, biome, count } of items) {
@@ -75,14 +64,10 @@
 
   const lists = {
     have: haveFrom(player),
-    need: null, // loaded on demand when the "I need" tab is opened
-    nation: null, // loaded on demand when the "Nations" tab is opened
+    need: null,
+    nation: null,
   };
-  // Mastery is only fetched when the "I need" tab is opened, and only for biomes you have unlocked
-  // (the game hides Mastery for locked biomes). Calls go one at a time with a short pause, and the
-  // result is cached for 5 minutes so re-opening the panel does not ask the server again.
   let masteryOk = false, masteryFailed = 0;
-  // A pause that is cut short if the panel closes; it removes its own cleanup entry when done
   const sleep = ms => new Promise(r => {
     const cancel = () => { clearTimeout(t); r(); };
     const t = setTimeout(() => { cleanups.splice(cleanups.indexOf(cancel), 1); r(); }, ms);
@@ -97,7 +82,6 @@
       fetchedAt.need = cache.at;
       masteryFailed = 0;
     } else {
-      // If the last load had biomes that failed, only those are asked again (the rest is kept)
       const prev = window.__getFishMasteryPartial;
       const retry = fresh(prev) && prev.failed.length > 0;
       const unlocked = (player.unlockedBiomes || []).map(String);
@@ -121,7 +105,6 @@
       masteryFailed = failed.length;
       rows = Object.values(byId).flat();
       fetchedAt.need = retry ? prev.at : Date.now();
-      // Complete results are cached; partial ones are kept apart so ↻ only retries the failed biomes
       if (masteryFailed) window.__getFishMasteryPartial = { at: fetchedAt.need, account, byId, failed };
       else { delete window.__getFishMasteryPartial; window.__getFishMastery = { at: fetchedAt.need, account, rows }; }
     }
@@ -132,8 +115,6 @@
     }));
   }
 
-  // Nations: one request (the same one the game uses) for your active nation orders.
-  // Each order has a fish, its biome, and how many are still needed. Cached for 5 minutes.
   let nationOk = false, onNationLoaded = null;
   async function loadNation(force = false) {
     const cache = window.__getFishNation;
@@ -152,7 +133,6 @@
       } catch { return; }
     }
     nationOk = true;
-    // An order without a fish name is skipped instead of breaking the whole tab
     lists.nation = merge(orders.filter(o => o && o.fish_name).map(o => {
       const biome = o.biome_id ?? o.biomeId ?? "?";
       return {
@@ -165,11 +145,9 @@
 
   const headings = { have: "I have:", need: "I need:", nation: "I need (Nations):" };
   let mode = ["need", "nation"].includes(saved.mode) ? saved.mode : "have";
-  let subtractOwned = saved.subtractOwned !== false; // on by default
+  let subtractOwned = saved.subtractOwned !== false;
   let biomeFrom = saved.biomeFrom ?? "", biomeTo = saved.biomeTo ?? "";
 
-  // What a tab shows: "I need" can subtract fish you already own (locked fish count too, since
-  // they can be sacrificed to Mastery), then both tabs apply the biome range.
   const ownedOf = f => lists.have
     .filter(h => h.name === f.name && (h.biome === "?" || String(h.biome) === String(f.biome)))
     .reduce((s, h) => s + h.count, 0);
@@ -179,16 +157,12 @@
       fish = fish.map(f => ({ ...f, count: f.count - ownedOf(f) })).filter(f => f.count > 0);
     }
     let lo = biomeFrom === "" ? -Infinity : Number(biomeFrom), hi = biomeTo === "" ? Infinity : Number(biomeTo);
-    if (lo > hi) [lo, hi] = [hi, lo]; // a range picked "backwards" (B8 to B3) still works
+    if (lo > hi) [lo, hi] = [hi, lo];
     return fish.filter(f => { const b = Number(f.biome); return isNaN(b) || (b >= lo && b <= hi); });
   };
 
-  // Discord format: code block with aligned columns, grouped by biome
   const biomeName = id => window.BIOMES?.[id]?.name || "";
-  // Escape game text before it goes into innerHTML
   const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  // Returns the list as one or more Discord messages (Discord's limit is 2000 characters).
-  // "full": aligned code block grouped by biome. "compact": one short line per fish, no code block.
   const DISCORD_LIMIT = 2000;
   let format = saved.format === "compact" ? "compact" : "full";
   const listFor = list => {
@@ -216,7 +190,6 @@
       const tail = last ? `${format === "full" ? "\n" : ""}\nTotal: ${total}` : "";
       return fence ? `${head}\n${fence}\n${body}${tail}\n${fence}` : `${head}\n${body}${tail}`;
     };
-    // Pack rows into chunks that fit, leaving room for the header, "(n/m)", fences and the total line
     const room = DISCORD_LIMIT - wrap("", 99, 99, true).length;
     const chunks = [[]];
     let len = 0;
@@ -225,18 +198,15 @@
       if (row.startsWith("── ")) header = row;
       if (len + row.length + 1 > room && chunks.at(-1).length) {
         chunks.push([]); len = 0;
-        // A part that starts in the middle of a biome repeats that biome's header
         if (header && row !== header && row !== "") { const h = header.replace(/ ──$/, " (cont.) ──"); chunks.at(-1).push(h); len += h.length + 1; }
       }
-      if (!chunks.at(-1).length && row === "") continue; // no blank line at the top of a part
+      if (!chunks.at(-1).length && row === "") continue;
       chunks.at(-1).push(row);
       len += row.length + 1;
     }
     return chunks.map((c, i) => wrap(c.join("\n"), i + 1, chunks.length, i === chunks.length - 1));
   };
 
-  // ---------- Panel UI ----------
-  // Rarity colors: use the game's own RARITY_COLORS (some are gradients), with a copy as fallback
   const RARITY_COLORS = window.RARITY_COLORS || {
     Common: "#9ca3af", Uncommon: "#84cc16", Fine: "#3b82f6", Rare: "#a855f7", Epic: "#ec4899",
     Legendary: "#f59e0b", Mythic: "#ef4444", Exotic: "linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%)",
@@ -336,7 +306,6 @@
     </div>`;
   document.body.appendChild(panel);
   panel.querySelector(".gf-close").onclick = stop;
-  // Esc closes the panel, but not while you are typing in the game (chat, search fields, ...)
   const onKey = e => {
     if (e.key !== "Escape") return;
     const el = document.activeElement;
@@ -347,7 +316,6 @@
   document.addEventListener("keydown", onKey);
   cleanups.push(() => document.removeEventListener("keydown", onKey));
 
-  // Drag the panel by its header
   const head = panel.querySelector(".gf-head");
   head.onmousedown = e => {
     if (e.target.closest(".gf-x, .gf-head-btns")) return;
@@ -364,8 +332,6 @@
 
   const chips = panel.querySelector(".gf-chips");
   const out = panel.querySelector(".gf-out");
-  // Each tab has its own rarity selection. Defaults: only Arcane and Exotic for "I have" and
-  // Mastery, all rarities for "Nations". Your own changes are remembered per tab.
   const allRarities = () => new Set([...RARITIES, ...[...lists.have, ...(lists.need || []), ...(lists.nation || [])].map(f => f.rarity)]);
   const savedBy = saved.rarityDefaultsV2 || {};
   const pick = (tab, fallback) => Array.isArray(savedBy[tab]) ? new Set(savedBy[tab]) : fallback;
@@ -375,13 +341,11 @@
     nation: saved.nationPicked === true ? pick("nation", allRarities()) : allRarities(),
   };
   let chosen = chosenBy[mode];
-  // Until you change the Nations selection yourself, every rarity found in your orders is selected
   let nationPicked = saved.nationPicked === true;
   onNationLoaded = () => { if (!nationPicked) lists.nation.forEach(f => chosenBy.nation.add(f.rarity)); };
   const raritiesIn = fish => [...RARITIES, ...new Set(fish.map(f => f.rarity).filter(r => !RARITIES.includes(r)))]
     .filter(r => fish.some(f => f.rarity === r));
 
-  // Loading state per tab, so switching tabs while one is loading cannot block or break the other
   const loadingBy = { need: false, nation: false };
   const isLoading = () => loadingBy[mode] === true;
   const anyLoading = () => loadingBy.need || loadingBy.nation;
@@ -420,12 +384,12 @@
   panel.querySelectorAll(".gf-mode button").forEach(b => b.onclick = async () => {
     const tab = b.dataset.mode;
     setMode(tab);
-    refreshAll(); // shows the tab right away (or its loading text)
+    refreshAll();
     if (tab === "need") await ensureNeed();
     if (tab === "nation") await ensureNation();
     if (!alive) return;
-    if (mode === tab) refreshAll(); // only redraw if you are still on this tab
-    else { drawBiomes(); if (mode === "nation" && !isLoading()) render(); } // update the overlap note
+    if (mode === tab) refreshAll();
+    else { drawBiomes(); if (mode === "nation" && !isLoading()) render(); }
   });
   panel.querySelectorAll(".gf-fmt button").forEach(b => {
     b.classList.toggle("on", b.dataset.fmt === format);
@@ -439,7 +403,6 @@
   subtractBox.onchange = () => { subtractOwned = subtractBox.checked; save(); refreshAll(); };
   fromSel.onchange = toSel.onchange = () => { biomeFrom = fromSel.value; biomeTo = toSel.value; save(); refreshAll(); };
 
-  // Refresh: fetch inventory again (1 request) and, if Mastery was loaded, Mastery again too
   refreshBtn.onclick = async () => {
     if (anyLoading()) return;
     refreshBtn.disabled = true;
@@ -460,7 +423,6 @@
 
   function userPicked() { if (mode === "nation") nationPicked = true; }
   function drawBiomes() {
-    // All game biomes (plus any seen in the lists), so a saved range is always visible in the menus
     const ids = [...new Set([...Object.keys(window.BIOMES || {}), ...[...lists.have, ...(lists.need || []), ...(lists.nation || [])].map(f => String(f.biome))])]
       .filter(b => !isNaN(Number(b))).sort((a, b) => a - b);
     const opts = (sel, label) => `<option value="">${label}</option>` +
@@ -507,7 +469,6 @@
         try { await navigator.clipboard.writeText(text); }
         catch { ta.select(); try { ok = document.execCommand("copy"); } catch { ok = false; } }
         if (!alive) return;
-        // Only say "Copied" if it really worked; otherwise the text is selected for Ctrl+C
         btn.textContent = ok ? "✓ Copied" : "Press Ctrl+C"; btn.classList.toggle("ok", ok);
         setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("ok"); }, ok ? 1500 : 4000);
       };
@@ -517,8 +478,6 @@
   }
 
 
-  // Nations tab only (shown in the panel, never in the copied text): fish that Mastery also needs.
-  // Fish you own are subtracted in both tabs, but each fish can only be handed in once.
   function overlapNote(fish) {
     const note = document.createElement("div");
     note.className = "gf-note";
@@ -540,7 +499,6 @@
     const min = Math.floor((Date.now() - fetchedAt[mode]) / 60000);
     return `Updated ${min < 1 ? "just now" : `${min} min ago`}`;
   };
-  // Keep "Updated X min ago" current (no server requests, only the label changes)
   const ticker = setInterval(() => {
     const el = out.querySelector(".gf-updated");
     if (el && fetchedAt[mode]) el.textContent = updatedText();
