@@ -1,6 +1,6 @@
-// getFish.js v2.7 · documentation: docs/getFish.md
+// getFish.js v2.8 · documentation: docs/getFish.md
 (async () => {
-  const VERSION = "2.7";
+  const VERSION = "2.8";
   window.__getFishStop?.();
   let alive = true;
   const cleanups = [];
@@ -187,7 +187,7 @@
     const fence = format === "full" ? "```" : "";
     const wrap = (body, part, parts, last) => {
       const head = `**${headings[mode]}**` + (parts > 1 ? ` (${part}/${parts})` : "");
-      const tail = last ? `${format === "full" ? "\n" : ""}\nTotal: ${total}` : "";
+      const tail = last && mode !== "nation" ? `${format === "full" ? "\n" : ""}\nTotal: ${total}` : "";
       return fence ? `${head}\n${fence}\n${body}${tail}\n${fence}` : `${head}\n${body}${tail}`;
     };
     const room = DISCORD_LIMIT - wrap("", 99, 99, true).length;
